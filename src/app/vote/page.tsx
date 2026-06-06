@@ -44,7 +44,7 @@ export default function VotePage() {
     }
   }
 
-  async function vote(optionId: number) {
+  async function submitVote(optionId: number) {
     const supabase = createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
@@ -77,7 +77,7 @@ export default function VotePage() {
               return (
                 <div key={opt.id}>
                   <button
-                    onClick={() => vote(opt.id)}
+                    onClick={() => submitVote(opt.id)}
                     disabled={!user || userVote !== null}
                     className={`w-full text-left bg-white rounded-xl p-4 shadow-[0_2px_10px_rgba(0,0,0,0.04)] transition-all ${isMine ? "ring-2 ring-primary" : ""} ${user && !userVote ? "hover:shadow-[0_4px_20px_rgba(0,0,0,0.08)] cursor-pointer" : "cursor-default"}`}
                   >
