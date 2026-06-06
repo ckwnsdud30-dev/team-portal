@@ -54,6 +54,7 @@ export default function FoodMapPage() {
   const [search, setSearch] = useState("");
   const [kakaoResults, setKakaoResults] = useState<KakaoPlace[]>([]);
   const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState("");
   const searchTimer = useRef<any>(null);
 
   const [regPlace, setRegPlace] = useState<KakaoPlace | null>(null);
@@ -134,15 +135,19 @@ export default function FoodMapPage() {
 
   function doSearch(q: string) {
     setSearch(q);
+    setSearchError("");
     if (searchTimer.current) clearTimeout(searchTimer.current);
     if (q.trim().length < 2) { setKakaoResults([]); return; }
     searchTimer.current = setTimeout(async () => {
       setSearching(true);
-      const params = new URLSearchParams({ query: q });
-      if (myPos) { params.set("x", String(myPos.lng)); params.set("y", String(myPos.lat)); params.set("radius", "2000"); }
-      const res = await fetch(`/api/kakao-search?${params}`);
-      const data = await res.json();
-      setKakaoResults(data.documents || []);
+      try {
+        const params = new URLSearchParams({ query: q });
+        if (myPos) { params.set("x", String(myPos.lng)); params.set("y", String(myPos.lat)); params.set("radius", "5000"); }
+        const res = await fetch(`/api/kakao-search?${params}`);
+        const data = await res.json();
+        if (data.error) { setSearchError(data.error); setKakaoResults([]); }
+        else setKakaoResults(data.documents || []);
+      } catch { setSearchError("검색 중 오류가 발생했습니다."); setKakaoResults([]); }
       setSearching(false);
     }, 400);
   }
@@ -241,7 +246,12 @@ export default function FoodMapPage() {
             </div>
           )}
 
-          {kakaoResults.length === 0 && search.length >= 2 && !searching && (
+          {searchError && (
+            <div className="bg-white rounded-xl p-6 shadow-[0_2px_10px_rgba(0,0,0,0.04)] mb-4 text-center text-sm text-red-500">
+              {searchError}
+            </div>
+          )}
+          {kakaoResults.length === 0 && search.length >= 2 && !searching && !searchError && (
             <div className="bg-white rounded-xl p-8 shadow-[0_2px_10px_rgba(0,0,0,0.04)] text-center text-sm text-[#86868b]">
               검색 결과가 없습니다.
             </div>
