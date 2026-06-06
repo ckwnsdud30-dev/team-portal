@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
-import { Shuffle, MapPin, Navigation, Crosshair } from "lucide-react";
+import { Shuffle, MapPin, Navigation, Crosshair, Search } from "lucide-react";
 import "leaflet/dist/leaflet.css";
 
 type Restaurant = {
@@ -16,7 +16,14 @@ type Restaurant = {
   lng: number | null;
 };
 
-const CATEGORIES = ["한식", "중식", "일식", "양식", "분식", "야식", "카페/디저트", "기타"];
+const CATEGORIES = [
+  "한식", "중식", "일식", "양식", "분식",
+  "치킨", "피자", "야식", "고기", "회/초밥",
+  "찜/탕", "국물", "면류", "샐러드", "도시락",
+  "카페/디저트", "패스트푸드", "기타",
+];
+
+const RADII = [1, 3, 5, 10];
 
 function haversine(lat1: number, lng1: number, lat2: number, lng2: number) {
   const R = 6371;
@@ -42,6 +49,9 @@ export default function FoodMapPage() {
   const [filter, setFilter] = useState("");
   const [sortMode, setSortMode] = useState<"latest" | "near">("latest");
   const [locating, setLocating] = useState(false);
+  const [search, setSearch] = useState("");
+  const [radius, setRadius] = useState(0);
+
   const mapRef = useRef<any>(null);
   const markersRef = useRef<any[]>([]);
   const myMarkerRef = useRef<any>(null);
@@ -64,7 +74,6 @@ export default function FoodMapPage() {
     async function initMap() {
       const L2: any = await import("leaflet").then(m => m.default || m);
       if (mapRef.current) return;
-
       mapRef.current = L2.map("food-map", { zoomControl: true }).setView([37.5665, 126.978], 12);
       L2.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19 }).addTo(mapRef.current);
     }
@@ -80,8 +89,7 @@ export default function FoodMapPage() {
       markersRef.current.forEach(m => m.remove());
       markersRef.current = [];
 
-      const visible = sortMode === "near" && myPos ? sortedList : displayList;
-      visible.forEach(r => {
+      finalList.forEach(r => {
         if (!r.lat || !r.lng) return;
         const marker = L2.marker([r.lat, r.lng]).addTo(map);
         marker.bindPopup(`<b>${r.name}</b><br/>${r.category}${r.address ? "<br/>" + r.address : ""}`);
@@ -93,14 +101,14 @@ export default function FoodMapPage() {
         myMarkerRef.current = L2.marker([myPos.lat, myPos.lng], { icon: L2.divIcon({ className: "bg-transparent", html: "<div style='width:16px;height:16px;background:#0071e3;border:3px solid white;border-radius:50%;box-shadow:0 2px 6px rgba(0,0,0,0.3)'></div>", iconSize: [16, 16], iconAnchor: [8, 8] }) }).addTo(map);
       }
 
-      if (visible.length > 0 && visible.some(r => r.lat && r.lng)) {
-        const bounds = L2.latLngBounds(visible.filter(r => r.lat && r.lng).map(r => [r.lat!, r.lng!]));
+      if (finalList.length > 0 && finalList.some(r => r.lat && r.lng)) {
+        const bounds = L2.latLngBounds(finalList.filter(r => r.lat && r.lng).map(r => [r.lat!, r.lng!]));
         if (myPos) bounds.extend([myPos.lat, myPos.lng]);
         map.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
       }
     }
     updateMarkers();
-  }, [restaurants, myPos, sortMode, filter]);
+  }, [restaurants, myPos, sortMode, filter, search, radius]);
 
   async function loadRestaurants(supabase: any) {
     const { data } = await supabase.from("restaurants").select("*").order("created_at", { ascending: false });
@@ -150,21 +158,37 @@ export default function FoodMapPage() {
   }
 
   function runRoulette() {
-    const list = sortMode === "near" && myPos ? sortedList : filtered;
-    if (list.length === 0) return;
+    if (finalList.length === 0) return;
     setRouletteResult(null);
-    setTimeout(() => setRouletteResult(list[Math.floor(Math.random() * list.length)]), 300);
+    setTimeout(() => setRouletteResult(finalList[Math.floor(Math.random() * finalList.length)]), 300);
   }
 
-  const filtered = filter ? restaurants.filter(r => r.category === filter) : restaurants;
+  const searched = search
+    ? restaurants.filter(r =>
+        r.name.toLowerCase().includes(search.toLowerCase()) ||
+        r.description.toLowerCase().includes(search.toLowerCase()) ||
+        r.address.toLowerCase().includes(search.toLowerCase())
+      )
+    : restaurants;
+
+  const filtered = filter ? searched.filter(r => r.category === filter) : searched;
+
+  const radiusFiltered = (myPos && radius > 0)
+    ? filtered.filter(r => {
+        if (!r.lat || !r.lng) return false;
+        return haversine(myPos.lat, myPos.lng, r.lat, r.lng) <= radius;
+      })
+    : filtered;
+
   const sortedList = myPos
-    ? [...filtered].sort((a, b) => {
+    ? [...radiusFiltered].sort((a, b) => {
         const da = a.lat && a.lng ? haversine(myPos.lat, myPos.lng, a.lat, a.lng) : Infinity;
         const db = b.lat && b.lng ? haversine(myPos.lat, myPos.lng, b.lat, b.lng) : Infinity;
         return da - db;
       })
-    : filtered;
-  const displayList = sortMode === "near" && myPos ? sortedList : filtered;
+    : radiusFiltered;
+
+  const finalList = sortMode === "near" && myPos ? sortedList : radiusFiltered;
 
   return (
     <div className="container mx-auto px-4 py-16 max-w-5xl">
@@ -187,12 +211,19 @@ export default function FoodMapPage() {
 
       <div className="h-[300px] rounded-xl overflow-hidden shadow-[0_2px_10px_rgba(0,0,0,0.04)] mb-6 bg-[#f5f5f7]" id="food-map" />
 
-      {!myPos && (
+      {!myPos ? (
         <button onClick={getMyLocation} disabled={locating}
           className="mb-4 h-8 px-4 rounded-lg border border-[#d2d2d7] text-xs font-medium bg-white hover:bg-[#f5f5f7] transition-all flex items-center gap-1.5">
           <Navigation className="h-3.5 w-3.5" />
           {locating ? "위치 확인 중..." : "내 위치 사용하기"}
         </button>
+      ) : (
+        <div className="flex items-center gap-2 mb-4 flex-wrap">
+          <Navigation className="h-3.5 w-3.5 text-primary" />
+          <span className="text-xs text-[#86868b]">내 위치 사용 중</span>
+          <button onClick={() => setMyPos(null)}
+            className="text-xs text-[#86868b] hover:text-red-500 underline ml-1">해제</button>
+        </div>
       )}
 
       {showForm && (
@@ -225,28 +256,51 @@ export default function FoodMapPage() {
         </form>
       )}
 
-      <div className="flex items-center gap-3 mb-6 flex-wrap">
-        <div className="flex flex-wrap gap-2">
-          <button onClick={() => setFilter("")}
-            className={`h-7 px-3 rounded-lg text-xs font-medium transition-all ${!filter ? "bg-primary text-primary-foreground" : "bg-white border border-[#d2d2d7] text-[#86868b]"}`}>전체</button>
-          {CATEGORIES.map(c => (
-            <button key={c} onClick={() => setFilter(c)}
-              className={`h-7 px-3 rounded-lg text-xs font-medium transition-all ${filter === c ? "bg-primary text-primary-foreground" : "bg-white border border-[#d2d2d7] text-[#86868b]"}`}>{c}</button>
+      <div className="relative mb-4">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#86868b]" />
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="맛집 이름, 메뉴, 주소 검색..."
+          className="w-full h-10 rounded-xl border border-[#d2d2d7] bg-white pl-9 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 transition-all" />
+      </div>
+
+      <div className="flex flex-wrap gap-2 mb-3">
+        <button onClick={() => setFilter("")}
+          className={`h-7 px-3 rounded-lg text-xs font-medium transition-all ${!filter ? "bg-primary text-primary-foreground" : "bg-white border border-[#d2d2d7] text-[#86868b]"}`}>전체</button>
+        {CATEGORIES.map(c => (
+          <button key={c} onClick={() => setFilter(c)}
+            className={`h-7 px-3 rounded-lg text-xs font-medium transition-all whitespace-nowrap ${filter === c ? "bg-primary text-primary-foreground" : "bg-white border border-[#d2d2d7] text-[#86868b]"}`}>{c}</button>
+        ))}
+      </div>
+
+      {myPos && (
+        <div className="flex items-center gap-2 mb-4 flex-wrap">
+          <span className="text-xs text-[#86868b]">반경:</span>
+          <button onClick={() => setRadius(0)}
+            className={`h-6 px-3 rounded-lg text-xs font-medium transition-all ${radius === 0 ? "bg-[#1d1d1f] text-white" : "bg-white border border-[#d2d2d7] text-[#86868b]"}`}>전체</button>
+          {RADII.map(r => (
+            <button key={r} onClick={() => setRadius(r)}
+              className={`h-6 px-3 rounded-lg text-xs font-medium transition-all ${radius === r ? "bg-[#1d1d1f] text-white" : "bg-white border border-[#d2d2d7] text-[#86868b]"}`}>{r}km</button>
           ))}
-        </div>
-        <div className="flex gap-2 ml-auto">
-          {myPos && (
+          <div className="ml-auto flex gap-2">
             <button onClick={() => setSortMode(sortMode === "near" ? "latest" : "near")}
-              className={`h-7 px-3 rounded-lg text-xs font-medium transition-all ${sortMode === "near" ? "bg-[#1d1d1f] text-white" : "bg-white border border-[#d2d2d7] text-[#86868b]"}`}>
+              className={`h-6 px-3 rounded-lg text-xs font-medium transition-all ${sortMode === "near" ? "bg-[#1d1d1f] text-white" : "bg-white border border-[#d2d2d7] text-[#86868b]"}`}>
               {sortMode === "near" ? "✓ 가까운순" : "가까운순"}
             </button>
-          )}
-          <button onClick={runRoulette} disabled={displayList.length === 0}
-            className="h-7 px-3 rounded-lg bg-[#1d1d1f] text-white text-xs font-medium shadow-[inset_0_1px_0_rgba(255,255,255,0.2)] hover:opacity-90 transition-all flex items-center gap-1 disabled:opacity-40">
+            <button onClick={runRoulette} disabled={finalList.length === 0}
+              className="h-6 px-3 rounded-lg bg-[#1d1d1f] text-white text-xs font-medium shadow-[inset_0_1px_0_rgba(255,255,255,0.2)] hover:opacity-90 transition-all flex items-center gap-1 disabled:opacity-40">
+              <Shuffle className="h-3 w-3" />룰렛
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!myPos && (
+        <div className="flex justify-end gap-2 mb-4">
+          <button onClick={runRoulette} disabled={finalList.length === 0}
+            className="h-6 px-3 rounded-lg bg-[#1d1d1f] text-white text-xs font-medium shadow-[inset_0_1px_0_rgba(255,255,255,0.2)] hover:opacity-90 transition-all flex items-center gap-1 disabled:opacity-40">
             <Shuffle className="h-3 w-3" />룰렛
           </button>
         </div>
-      </div>
+      )}
 
       {rouletteResult && (
         <div className="bg-white rounded-xl p-6 shadow-[0_4px_20px_rgba(0,0,0,0.08)] mb-6 text-center">
@@ -256,34 +310,41 @@ export default function FoodMapPage() {
         </div>
       )}
 
-      {displayList.length === 0 ? (
+      {finalList.length === 0 ? (
         <div className="bg-white rounded-xl p-12 shadow-[0_2px_10px_rgba(0,0,0,0.04)] text-center">
-          <p className="text-[#86868b]">등록된 맛집이 없습니다.</p>
+          <p className="text-[#86868b]">조건에 맞는 맛집이 없습니다.</p>
           {user ? <p className="text-sm text-[#86868b] mt-1">&quot;맛집 등록&quot; 버튼으로 추가해보세요!</p> :
             <p className="text-sm text-[#86868b] mt-1"><Link href="/login" className="text-primary hover:underline">로그인</Link>하면 맛집을 등록할 수 있습니다.</p>}
         </div>
       ) : (
-        <div className="space-y-3">
-          {displayList.map(r => {
-            const dist = r.lat && r.lng && myPos ? haversine(myPos.lat, myPos.lng, r.lat, r.lng) : null;
-            return (
-              <div key={r.id} className="bg-white rounded-xl p-5 shadow-[0_2px_10px_rgba(0,0,0,0.04)] hover:shadow-[0_4px_20px_rgba(0,0,0,0.08)] transition-all">
-                <div className="flex items-start justify-between">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <h3 className="font-medium text-[#1d1d1f]">{r.name}</h3>
-                      {dist !== null && <span className="text-xs text-[#86868b]">{dist < 1 ? `${Math.round(dist * 1000)}m` : `${dist.toFixed(1)}km`}</span>}
-                    </div>
-                    {r.description && <p className="text-sm text-[#86868b] mt-0.5">{r.description}</p>}
-                    {r.address && <p className="text-xs text-[#86868b] mt-1 flex items-center gap-1"><MapPin className="h-3 w-3" />{r.address}</p>}
-                  </div>
-                  <span className="text-xs bg-[#f5f5f7] text-[#86868b] px-2 py-1 rounded-lg shrink-0 ml-2">{r.category}</span>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        <p className="text-xs text-[#86868b] mb-3">총 {finalList.length}개{radius > 0 && myPos ? ` (내 위치에서 ${radius}km 이내)` : ""}</p>
       )}
+
+      <div className="space-y-3">
+        {finalList.map(r => {
+          const dist = r.lat && r.lng && myPos ? haversine(myPos.lat, myPos.lng, r.lat, r.lng) : null;
+          return (
+            <div key={r.id} className="bg-white rounded-xl p-5 shadow-[0_2px_10px_rgba(0,0,0,0.04)] hover:shadow-[0_4px_20px_rgba(0,0,0,0.08)] transition-all">
+              <div className="flex items-start justify-between">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="font-medium text-[#1d1d1f]">{r.name}</h3>
+                    {dist !== null && (
+                      <span className="text-xs text-[#86868b]">
+                        {dist < 1 ? `${Math.round(dist * 1000)}m` : `${dist.toFixed(1)}km`}
+                        {radius > 0 && dist !== null && dist <= radius && <span className="text-primary ml-1">✓</span>}
+                      </span>
+                    )}
+                  </div>
+                  {r.description && <p className="text-sm text-[#86868b] mt-0.5">{r.description}</p>}
+                  {r.address && <p className="text-xs text-[#86868b] mt-1 flex items-center gap-1"><MapPin className="h-3 w-3 shrink-0" />{r.address}</p>}
+                </div>
+                <span className="text-xs bg-[#f5f5f7] text-[#86868b] px-2 py-1 rounded-lg shrink-0 ml-2">{r.category}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
